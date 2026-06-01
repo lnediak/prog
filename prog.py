@@ -118,7 +118,7 @@ class CustomQP(cpr.solvers.qp_solvers.qp_solver.QpSolver):
         self.dz = A @ x - b * tau
         self.dz[nz:] += s
         self.dtau = kappa + q @ x + b @ z + (x @ P @ x) / tau
-        self.ds = np.hstack([np.zeros(nz), 2 * s])
+        self.ds = np.hstack([np.zeros(nz), s])
         self.dkappa = kappa * tau
 
     def kktsolve(self, rhs):
@@ -130,16 +130,28 @@ class CustomQP(cpr.solvers.qp_solvers.qp_solver.QpSolver):
         ar, ac = A.shape
         N = pn + ar
         Hd = self.s / self.z[self.nz :]
-        data = np.hstack([P.data, A.data, A.data, Hd])
+        data = np.hstack([P.data, A.data, A.data, -Hd])
         row = np.hstack([P.row, A.col, A.row + pn, np.arange(pn + nz, N)])
         col = np.hstack([P.col, A.row + pn, A.col, np.arange(pn + nz, N)])
         M = sp.coo_array((data, (row, col)), shape=(N, N))
         # TODO: CACHE STUFF
+        print(M.toarray())  # TODO: DEBUG
+        print(rhs)  # TODO: DEBUG
+        print()  # TODO: DEBUG
         return sp.linalg.spsolve(M.tocsc(), rhs)
 
     def full_kktsolve(self):
         P, q, A, b, nz, nnz = self.P, self.q, self.A, self.b, self.nz, self.nnz
         x, z, s, tau, kappa = self.x, self.z, self.s, self.tau, self.kappa
+        print(f"{P.toarray()=}")  # TODO: DEBUG
+        print(f"{q=}")  # TODO: DEBUG
+        print(f"{A.toarray()=}")  # TODO: DEBUG
+        print(f"{b=}")  # TODO: DEBUG
+        print(f"{x=}")  # TODO: DEBUG
+        print(f"{z=}")  # TODO: DEBUG
+        print(f"{s=}")  # TODO: DEBUG
+        print(f"{tau=}")  # TODO: DEBUG
+        print(f"{kappa=}")  # TODO: DEBUG
         dx, dz, dt, ds, dk = self.dx, self.dz, self.dtau, self.ds, self.dkappa
         pn = P.shape[0]
         Hd = s / z[nz:]
@@ -200,6 +212,7 @@ class CustomQP(cpr.solvers.qp_solvers.qp_solver.QpSolver):
         nz = np.linalg.norm(zb)
         nb = np.max(np.abs(b))
         nq = np.max(np.abs(q))
+        print(f"{nrp=},{nrd=},{gap=}")  # TODO: DEBUG
         return (
             nrp < eps * max(1, nb + nx + ns)
             and nrd < eps * max(1, nq + nx + nz)
@@ -242,7 +255,7 @@ class CustomQP(cpr.solvers.qp_solvers.qp_solver.QpSolver):
 if __name__ == "__main__":
     x = cp.Variable(3)
     prob = cp.Problem(
-        cp.Minimize(cp.quad_form(x[0:1], np.ones((1, 1))) + x[1]),
+        cp.Minimize(cp.quad_form(x, np.eye(3)) + x[1]),
         [x[:2] >= -1, x[1] + x[2] == 1],
     )
     prob.solve(solver=CustomQP())
