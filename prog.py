@@ -30,13 +30,13 @@ class CustomQP(cpr.solvers.qp_solvers.qp_solver.QpSolver):
             z = solution["z"]
             n_eq = self.nz
             eq_dual = cpr.solvers.utilities.get_dual_values(
-                y[:n_eq],
-                utilities.extract_dual_value,
+                z[:n_eq],
+                cpr.solvers.utilities.extract_dual_value,
                 inverse_data[self.EQ_CONSTR],
             )
             ineq_dual = cpr.solvers.utilities.get_dual_values(
-                y[n_eq:],
-                utilities.extract_dual_value,
+                z[n_eq:],
+                cpr.solvers.utilities.extract_dual_value,
                 inverse_data[self.NEQ_CONSTR],
             )
             dual_vars = {}
@@ -103,10 +103,10 @@ class CustomQP(cpr.solvers.qp_solvers.qp_solver.QpSolver):
         xz = sp.linalg.spsolve(M.tocsc(), rhs)
         self.x = xz[:pn]
         z = xz[pn:]
-        alphap = np.min(z[self.nz :])
+        alphap = np.max(z[self.nz :])
         s0 = -z if alphap < -eps else -z + np.full_like(z, eps + alphap)
         self.s = s0[self.nz :]
-        alphad = np.min(-z[self.nz :])
+        alphad = np.max(-z[self.nz :])
         self.z = z if alphad < -eps else z + np.full_like(z, eps + alphad)
         self.tau = 1.0
         self.kappa = 1.0
@@ -137,7 +137,6 @@ class CustomQP(cpr.solvers.qp_solvers.qp_solver.QpSolver):
         # TODO: CACHE STUFF
         print(M.toarray())  # TODO: DEBUG
         print(rhs)  # TODO: DEBUG
-        print()  # TODO: DEBUG
         return sp.linalg.spsolve(M.tocsc(), rhs)
 
     def full_kktsolve(self):
@@ -181,9 +180,15 @@ class CustomQP(cpr.solvers.qp_solvers.qp_solver.QpSolver):
         nz = self.nz
         x, z, s, tau, kappa = self.x, self.z, self.s, self.tau, self.kappa
         sx, sz, ss, st, sk = self.sx, self.sz, self.ss, self.stau, self.skappa
+        print(f"{sx=}")  # TODO: DEBUG
+        print(f"{sz=}")  # TODO: DEBUG
+        print(f"{ss=}")  # TODO: DEBUG
+        print(f"{st=}")  # TODO: DEBUG
+        print(f"{sk=}")  # TODO: DEBUG
         alpha = min(self.ms_nn(s, ss), self.ms_nn(z[nz:], sz[nz:]))
         alpha = min(alpha, self.ms_nn(tau, st), self.ms_nn(kappa, sk))
         alpha = min(1, alpha * 0.99)  # as cvxopt does
+        print(f"{alpha=}")  # TODO: DEBUG
         self.x = x + alpha * sx
         self.z = z + alpha * sz
         self.s = s + alpha * ss
@@ -237,6 +242,8 @@ class CustomQP(cpr.solvers.qp_solvers.qp_solver.QpSolver):
         self.solver_init(ieps)
         iters = 0
         while not self.check_term(teps):
+            print()  # TODO: DEBUG
+            print("ITER START")  # TODO: DEBUG
             self.compute_res()
             # TODO: MEHROTRA CORRECTION
             self.full_kktsolve()
@@ -259,4 +266,5 @@ if __name__ == "__main__":
         [x[:2] >= -1, x[1] + x[2] == 1],
     )
     prob.solve(solver=CustomQP())
+    print("SOLVED!!!")
     print(f"{prob.value=},{x.value=}")
