@@ -135,22 +135,11 @@ class CustomQP(cpr.solvers.qp_solvers.qp_solver.QpSolver):
         col = np.hstack([P.col, A.row + pn, A.col, np.arange(pn + nz, N)])
         M = sp.coo_array((data, (row, col)), shape=(N, N))
         # TODO: CACHE STUFF
-        print(M.toarray())  # TODO: DEBUG
-        print(rhs)  # TODO: DEBUG
         return sp.linalg.spsolve(M.tocsc(), rhs)
 
     def full_kktsolve(self):
         P, q, A, b, nz, nnz = self.P, self.q, self.A, self.b, self.nz, self.nnz
         x, z, s, tau, kappa = self.x, self.z, self.s, self.tau, self.kappa
-        print(f"{P.toarray()=}")  # TODO: DEBUG
-        print(f"{q=}")  # TODO: DEBUG
-        print(f"{A.toarray()=}")  # TODO: DEBUG
-        print(f"{b=}")  # TODO: DEBUG
-        print(f"{x=}")  # TODO: DEBUG
-        print(f"{z=}")  # TODO: DEBUG
-        print(f"{s=}")  # TODO: DEBUG
-        print(f"{tau=}")  # TODO: DEBUG
-        print(f"{kappa=}")  # TODO: DEBUG
         dx, dz, dt, ds, dk = self.dx, self.dz, self.dtau, self.ds, self.dkappa
         pn = P.shape[0]
         Hd = s / z[nz:]
@@ -180,22 +169,16 @@ class CustomQP(cpr.solvers.qp_solvers.qp_solver.QpSolver):
         nz = self.nz
         x, z, s, tau, kappa = self.x, self.z, self.s, self.tau, self.kappa
         sx, sz, ss, st, sk = self.sx, self.sz, self.ss, self.stau, self.skappa
-        print(f"{sx=}")  # TODO: DEBUG
-        print(f"{sz=}")  # TODO: DEBUG
-        print(f"{ss=}")  # TODO: DEBUG
-        print(f"{st=}")  # TODO: DEBUG
-        print(f"{sk=}")  # TODO: DEBUG
         alpha = min(self.ms_nn(s, ss), self.ms_nn(z[nz:], sz[nz:]))
         alpha = min(alpha, self.ms_nn(tau, st), self.ms_nn(kappa, sk))
         alpha = min(1, alpha * 0.99)  # as cvxopt does
-        print(f"{alpha=}")  # TODO: DEBUG
         self.x = x + alpha * sx
         self.z = z + alpha * sz
         self.s = s + alpha * ss
         self.tau = tau + alpha * st
         self.kappa = kappa + alpha * sk
 
-    def check_term(self, eps):
+    def check_term(self, teps, ireps, iaeps):
         # TODO: RUIZ UNSCALING
         P, q, A, b, nz, nnz = self.P, self.q, self.A, self.b, self.nz, self.nnz
         x, z, s, tau, kappa = self.x, self.z, self.s, self.tau, self.kappa
@@ -217,12 +200,35 @@ class CustomQP(cpr.solvers.qp_solvers.qp_solver.QpSolver):
         nz = np.linalg.norm(zb)
         nb = np.max(np.abs(b))
         nq = np.max(np.abs(q))
-        print(f"{nrp=},{nrd=},{gap=}")  # TODO: DEBUG
-        return (
-            nrp < eps * max(1, nb + nx + ns)
-            and nrd < eps * max(1, nq + nx + nz)
-            and gap < eps * max(1, min(np.abs(gp), np.abs(gd)))
-        )
+        if (
+            nrp < teps * max(1, nb + nx + ns)
+            and nrd < teps * max(1, nq + nx + nz)
+            and gap < teps * max(1, min(np.abs(gp), np.abs(gd)))
+        ):
+            self.status = cp.settings.OPTIMAL
+            return True
+        # now looking at non-normalized variables
+        nx = np.linalg.norm(x)
+        nz = np.linalg.norm(z)
+        nAz = np.linalg.norm(A.T @ z)
+        bz = b @ z
+        if bz < -iaeps and nAz < -ireps * bz * max(1, nx + nz):
+            self.status = cp.settings.INFEASIBLE
+            return True
+        ns = np.linalg.norm(s)
+        nPx = np.linalg.norm(P @ x)
+        Axs = A @ x
+        Axs[self.nz :] += s
+        nAxs = np.linalg.norm(Axs)
+        qx = q @ x
+        if (
+            qx < -iaeps
+            and nPx < -ireps * qx * max(1, nx)
+            and nAxs < -ireps * qx * max(1, nx + ns)
+        ):
+            self.status = cp.settings.UNBOUNDED
+            return True
+        return False
 
     def solve_via_data(
         self,
@@ -237,13 +243,13 @@ class CustomQP(cpr.solvers.qp_solvers.qp_solver.QpSolver):
         """
         ieps = solver_opts["init_eps"] if "init_eps" in solver_opts else 1e-8
         teps = solver_opts["term_eps"] if "term_eps" in solver_opts else 1e-8
+        ireps = solver_opts["ir_eps"] if "ir_eps" in solver_opts else 1e-8
+        iaeps = solver_opts["ia_eps"] if "ia_eps" in solver_opts else 1e-8
         self.parse_data(data)
         # TODO: RUIZ EQUILIBRATION
         self.solver_init(ieps)
         iters = 0
-        while not self.check_term(teps):
-            print()  # TODO: DEBUG
-            print("ITER START")  # TODO: DEBUG
+        while not self.check_term(teps, ireps, iaeps):
             self.compute_res()
             # TODO: MEHROTRA CORRECTION
             self.full_kktsolve()
@@ -251,7 +257,7 @@ class CustomQP(cpr.solvers.qp_solvers.qp_solver.QpSolver):
             iters += 1
         solution = {}
         solution[s.NUM_ITERS] = iters
-        solution[s.STATUS] = s.OPTIMAL  # TODO: ACTUALLY CHECK
+        solution[s.STATUS] = self.status
         solution[s.VALUE] = self.obj
         solution[s.PRIMAL] = self.primal
         solution["z"] = self.dual
@@ -261,10 +267,15 @@ class CustomQP(cpr.solvers.qp_solvers.qp_solver.QpSolver):
 
 if __name__ == "__main__":
     x = cp.Variable(3)
-    prob = cp.Problem(
-        cp.Minimize(cp.quad_form(x, np.eye(3)) + x[1]),
-        [x[:2] >= -1, x[1] + x[2] == 1],
-    )
+    obj = cp.Minimize(cp.quad_form(x, np.eye(3)) + x[1])
+    prob = cp.Problem(obj, [x[:2] >= -1, x[1] + x[2] == 1])
     prob.solve(solver=CustomQP())
-    print("SOLVED!!!")
     print(f"{prob.value=},{x.value=}")
+    print(f"{[c.dual_value for c in prob.constraints]=}")
+    prob = cp.Problem(obj, [x[:2] >= 0, x[0] + x[1] <= -1])
+    prob.solve(solver=CustomQP())
+    print(f"{prob.status=}, should be infeasible")
+    obj = cp.Minimize(cp.quad_form(x, np.diag([1, 0, 0])) + x[1])
+    prob = cp.Problem(obj, [x <= 0])
+    prob.solve(solver=CustomQP())
+    print(f"{prob.status=}, should be unbounded")
