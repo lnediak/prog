@@ -141,20 +141,18 @@ class CustomQP(cpr.solvers.qp_solvers.qp_solver.QpSolver):
         P, q, A, b, nz, nnz = self.P, self.q, self.A, self.b, self.nz, self.nnz
         x, z, s, tau, kappa = self.x, self.z, self.s, self.tau, self.kappa
         dx, dz, dt, ds, dk = self.dx, self.dz, self.dtau, self.ds, self.dkappa
+        r2 = ds - dz
         pn = P.shape[0]
         Hd = s / z[nz:]
         xi = x / tau
-        qbxz = self.kktsolve(np.hstack([-q, b]))
-        v1, v2 = qbxz[:pn], qbxz[pn:]
-        dif = xi - v1
-        dtau_denom = kappa / tau + dif @ P @ dif + v2[nz:] @ (Hd * v2[nz:])
-        # TODO: FIX NUMERATOR
-        xz1 = self.kktsolve(np.hstack([dx, ds - dz]))
-        x1, z1 = xz1[:pn], xz1[pn:]
-        dtau_numer = dt - dk / tau + (P @ xi * 2 + q) @ x1 + b @ z1
+        qbxz = self.kktsolve(np.hstack([2 * P @ xi + q, b]))
+        u1, u2 = qbxz[:pn], qbxz[pn:]
+        dif = xi - u1
+        dtau_denom = kappa / tau + dif @ P @ dif + u2[nz:] @ (Hd * u2[nz:])
+        dtau_numer = dt - dk / tau + dx @ u1 + r2 @ u2
         self.stau = dtau_numer / dtau_denom
-        self.sx = x1 + self.stau * v1
-        self.sz = z1 + self.stau * v2
+        xz = self.kktsolve(np.hstack([dx - self.stau * q, r2 + self.stau * b]))
+        self.sx, self.sz = xz[:pn], xz[pn:]
         self.ss = -ds[nz:] - Hd * self.sz[nz:]
         self.skappa = -(dk + kappa * self.stau) / tau
 
