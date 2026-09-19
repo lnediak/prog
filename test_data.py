@@ -11,7 +11,7 @@ import prog_cvxpy
 import read_qps
 
 
-def print_stuff(P, A, b, q, x, z, s, tt, file):
+def print_stuff(P, A, b, q, x, z, s, tt, ni, file):
     xn = np.linalg.norm(x)
     zn = np.linalg.norm(z)
     r1t = -(P @ x + A.T @ z + q)
@@ -27,6 +27,7 @@ def print_stuff(P, A, b, q, x, z, s, tt, file):
     diffden = beta * gamma + alpha * (beta * zn * zn + gamma * xn * xn)
     diffterm = alpha * np.abs(r1t @ x + r2t @ z) / np.sqrt(diffden)
     print(f"ELAPSED: {tt}s")
+    print(f"num_iters: {ni}")
     print(f"Dual residual term: {r1term}")
     print(f"Primal residual term: {r2term}")
     print(f"Residual diff term: {diffterm}")
@@ -34,6 +35,7 @@ def print_stuff(P, A, b, q, x, z, s, tt, file):
     print()
     with open(os.path.join("out/", file), "w") as fw:
         fw.write(f"ELAPSED: {tt}s\n")
+        fw.write(f"num_iters: {ni}\n")
         fw.write(f"{prob.status}\n{prob.value}\n")
         fw.write(f"{np.linalg.norm(r1t)}\n{r1t @ x}\n")
         fw.write(f"{np.linalg.norm(r2t)}\n{r2t @ z}\n")
@@ -83,7 +85,8 @@ if __name__ == "__main__":
         x = soln[cp.settings.PRIMAL]
         z = soln["z"]
         s = soln["s"]
-        print_stuff(P, A, b, q, x, z, s, kektime, file + "-kek.txt")
+        ni = prob.solver_stats.num_iters
+        print_stuff(P, A, b, q, x, z, s, kektime, ni, file + "-kek.txt")
 
         # clarabel version
         prob = cp.Problem(cp.Minimize(obj), constraints)
@@ -106,4 +109,5 @@ if __name__ == "__main__":
         x = soln.x
         z = soln.z
         s = soln.s
-        print_stuff(P, A, b, q, x, z, s, clatime, file + "-clarabel.txt")
+        ni = prob.solver_stats.num_iters
+        print_stuff(P, A, b, q, x, z, s, clatime, ni, file + "-clarabel.txt")
