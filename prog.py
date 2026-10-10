@@ -113,27 +113,7 @@ class KekQP:
         self.rhs[:pn] = dx - self.stau * q
         self.rhs[pn:] = r2 + self.stau * b
         xz = self.kktsolver.kktsolve(None, self.rhs)
-
-        # TODO: DEBUG
-        self.rhs[:pn] = dx
-        self.rhs[pn:] = r2
-        xz1 = self.kktsolver.kktsolve(None, self.rhs)
-        x1, z1 = xz1[:pn], xz1[pn:]
-        self.rhs[:pn] = -q
-        self.rhs[pn:] = b
-        xz2 = self.kktsolver.kktsolve(None, self.rhs)
-        x2, z2 = xz2[:pn], xz2[pn:]
-        pxq = 2 * (P @ xi) + q
-        dtau_numer = dt - dk / tau + pxq @ x1 + b @ z1
-        dtau_denom = kappa / tau + xi @ P @ xi - pxq @ x2 - b @ z2
-        stau = dtau_numer / dtau_denom
-        print(f"{self.stau=},{stau=}")  # TODO: DEBUG
-        sx = x1 + stau * x2
-        sz = z1 + stau * z2
-
         self.sx, self.sz = xz[:pn], xz[pn:]
-        print(f"{np.max(np.abs(self.sx - sx))=}")  # TODO: DEBUG
-        print(f"{np.max(np.abs(self.sz - sz))=}")  # TODO: DEBUG
         self.ss = -ds[nz:] - Hd * self.sz[nz:]
         self.skappa = -(dk + kappa * self.stau) / tau
 
@@ -253,18 +233,20 @@ class KekQP:
             sigma = (1 - alpha) ** 3
             mu = np.sum(self.s * self.z[self.nz :])
             mu = (mu + self.tau * self.kappa) / (self.nnz + 1)
+            m = 1
             if iters == 0:
                 # don't ask me why this is done, I found it in
                 # Clarabel.rs/src/solver/implementations/default/variables.rs:
                 # fn combined_step_rhs
                 # condition from src/solver/core/solver.rs
-                self.sz *= alpha
+                m = alpha
+                self.sz *= m
             etae = self.ss * self.sz[self.nz :]
             etae -= sigma * mu
             self.dx *= 1 - sigma
             self.dz *= 1 - sigma
             self.dtau *= 1 - sigma
-            self.dkappa += self.dkappa * self.dtau - sigma * mu
+            self.dkappa += m * self.skappa * self.stau - sigma * mu
             self.ds[self.nz :] += etae / self.z[self.nz :]
             self.full_kktsolve(set_diag=False)
             alpha = self.get_stepsize() * max_step_frac
