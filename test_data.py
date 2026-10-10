@@ -57,19 +57,21 @@ if __name__ == "__main__":
             "QFORPLAN.QPS",
         ]:
             continue
-        if file not in ["QSCAGR25.QPS"]:
-            continue  # kek
+        # if file not in ["QSCAGR25.QPS"]:
+        #     continue  # kek
         print(file)
         with open(os.path.join(datadir, file), "r") as f:
             obj, constraints, X = read_qps.read_qps(f)
         prob = cp.Problem(cp.Minimize(obj), constraints)
-        solver_opts = {"max_iter": 0}
+        solver_opts = {
+            # "max_iter": 200,
+        }
         data, chain, inverse_data = prob.get_problem_data(
             prog_cvxpy.CustomQP(), solver_opts=solver_opts
         )
         start = time.perf_counter()
         soln = chain.solve_via_data(
-            prob, data, verbose=True, solver_opts=solver_opts
+            prob, data, verbose=False, solver_opts=solver_opts
         )
         kektime = time.perf_counter() - start
         prob.unpack_results(soln, chain, inverse_data)
@@ -97,7 +99,7 @@ if __name__ == "__main__":
             "presolve_enable": False,
             "static_regularization_enable": False,
             "dynamic_regularization_enable": False,
-            "max_iter": 0,
+            # "max_iter": 0,
         }
         prob = cp.Problem(cp.Minimize(obj), constraints)
         data, chain, inverse_data = prob.get_problem_data(
@@ -105,7 +107,7 @@ if __name__ == "__main__":
         )
         start = time.perf_counter()
         soln = chain.solve_via_data(
-            prob, data, verbose=True, solver_opts=solver_opts
+            prob, data, verbose=False, solver_opts=solver_opts
         )
         clatime = time.perf_counter() - start
         prob.unpack_results(soln, chain, inverse_data)
@@ -124,8 +126,5 @@ if __name__ == "__main__":
         x = soln.x
         z = soln.z
         s = soln.s
-        print(f"{np.max(np.abs(kekx - x))=}")  # TODO: DEBUG
-        print(f"{np.max(np.abs(kekz - z))=}")  # TODO: DEBUG
-        print(f"{np.max(np.abs(keks - s))=}")  # TODO: DEBUG
         ni = prob.solver_stats.num_iters
         print_stuff(P, A, b, q, x, z, s, clatime, ni, file + "-clarabel.txt")

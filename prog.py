@@ -74,7 +74,6 @@ class KekQP:
             target = max(1, eps * posmargin / len(znz))
         else:
             target = 1
-        print(f"{alphap=},{posmargin=}")  # TODO: DEBUG
         if alphap >= 0:
             z[nz:] += alphap
             z[nz:] += target
@@ -156,57 +155,62 @@ class KekQP:
         self.tau = tau + alpha * st
         self.kappa = kappa + alpha * sk
 
-    def check_term(self, teps, ireps, iaeps):
+    def check_term(self, tol_kratio, teps, ireps, iaeps):
         # TODO: RUIZ UNSCALING
         P, q, A, b, nz, nnz = self.P, self.q, self.A, self.b, self.nz, self.nnz
         x, z, s, tau, kappa = self.x, self.z, self.s, self.tau, self.kappa
-        xb = x / tau
-        self.primal = xb
-        sb = np.hstack([np.zeros(nz), s / tau])
-        zb = z / tau
-        self.dual = zb
-        self.slack = sb
-        rp = A @ xb + sb - b
-        rd = P @ xb + A.T @ zb + q
-        gp = (xb @ P @ xb) / 2 + q @ xb
-        self.obj = gp
-        gd = -(xb @ P @ xb) / 2 - b @ zb
-        nrp = np.linalg.norm(rp)
-        nrd = np.linalg.norm(rd)
-        gap = np.abs(gp - gd)
-        nx = np.linalg.norm(xb)
-        ns = np.linalg.norm(sb)
-        nz = np.linalg.norm(zb)
-        nb = np.max(np.abs(b))
-        nq = np.max(np.abs(q))
-        if (
-            nrp < teps * max(1, nb + nx + ns)
-            and nrd < teps * max(1, nq + nx + nz)
-            and gap < teps * max(1, min(np.abs(gp), np.abs(gd)))
-        ):
-            self.status = SStatus.OPTIMAL
-            return True
-        # now looking at non-normalized variables
-        nx = np.linalg.norm(x)
-        nz = np.linalg.norm(z)
-        nAz = np.linalg.norm(A.T @ z)
-        bz = b @ z
-        if bz < -iaeps and nAz < -ireps * bz * max(1, nx + nz):
-            self.status = SStatus.INFEASIBLE
-            return True
-        ns = np.linalg.norm(s)
-        nPx = np.linalg.norm(P @ x)
-        Axs = A @ x
-        Axs[self.nz :] += s
-        nAxs = np.linalg.norm(Axs)
-        qx = q @ x
-        if (
-            qx < -iaeps
-            and nPx < -ireps * qx * max(1, nx)
-            and nAxs < -ireps * qx * max(1, nx + ns)
-        ):
-            self.status = SStatus.UNBOUNDED
-            return True
+        kratio = kappa / tau
+        # this condition isn't mentioned in the paper, but it can be found
+        # Clarabel.rs/src/solver/implementations/default/info.rs
+        # fn check_convergence
+        if kratio <= 1:
+            xb = x / tau
+            self.primal = xb
+            sb = np.hstack([np.zeros(nz), s / tau])
+            zb = z / tau
+            self.dual = zb
+            self.slack = sb
+            rp = A @ xb + sb - b
+            rd = P @ xb + A.T @ zb + q
+            gp = (xb @ P @ xb) / 2 + q @ xb
+            self.obj = gp
+            gd = -(xb @ P @ xb) / 2 - b @ zb
+            nrp = np.linalg.norm(rp)
+            nrd = np.linalg.norm(rd)
+            gap = np.abs(gp - gd)
+            nx = np.linalg.norm(xb)
+            ns = np.linalg.norm(sb)
+            nz = np.linalg.norm(zb)
+            nb = np.max(np.abs(b))
+            nq = np.max(np.abs(q))
+            if (
+                nrp < teps * max(1, nb + nx + ns)
+                and nrd < teps * max(1, nq + nx + nz)
+                and gap < teps * max(1, min(np.abs(gp), np.abs(gd)))
+            ):
+                self.status = SStatus.OPTIMAL
+                return True
+        elif kratio > 1000 / tol_kratio:
+            nz = np.linalg.norm(z)
+            nAz = np.linalg.norm(A.T @ z)
+            bz = b @ z
+            if bz < -iaeps and nAz < -ireps * bz * max(1, nz):
+                self.status = SStatus.INFEASIBLE
+                return True
+            nx = np.linalg.norm(x)
+            ns = np.linalg.norm(s)
+            nPx = np.linalg.norm(P @ x)
+            Axs = A @ x
+            Axs[self.nz :] += s
+            nAxs = np.linalg.norm(Axs)
+            qx = q @ x
+            if (
+                qx < -iaeps
+                and nPx < -ireps * qx * max(1, nx)
+                and nAxs < -ireps * qx * max(1, nx + ns)
+            ):
+                self.status = SStatus.UNBOUNDED
+                return True
         return False
 
     def solve(self, P, q, A, b, nz, verbose, solver_opts):
@@ -229,6 +233,7 @@ class KekQP:
         else:
             self.kktsolver = DefaultQPKKTSolver(P, A, ir_iter)
         ieps = solver_opts.get("init_eps", 0.1)
+        tol_kratio = solver_opts.get("tol_kratio", 1e-6)
         teps = solver_opts.get("term_eps", 1e-8)
         ireps = solver_opts.get("ir_eps", 1e-8)
         iaeps = solver_opts.get("ia_eps", 1e-8)
@@ -238,7 +243,7 @@ class KekQP:
         # TODO: RUIZ EQUILIBRATION
         self.solver_init(ieps)
         iters = 0
-        while not self.check_term(teps, ireps, iaeps):
+        while not self.check_term(tol_kratio, teps, ireps, iaeps):
             if iters >= maxit:
                 self.status = SStatus.MAXITER
                 break
