@@ -57,17 +57,20 @@ if __name__ == "__main__":
             "QFORPLAN.QPS",
         ]:
             continue
-        # if file not in ["LISWET7.QPS"]:
-        #     continue  # kek
+        if file not in ["QSCAGR25.QPS"]:
+            continue  # kek
         print(file)
         with open(os.path.join(datadir, file), "r") as f:
             obj, constraints, X = read_qps.read_qps(f)
         prob = cp.Problem(cp.Minimize(obj), constraints)
+        solver_opts = {"max_iter": 0}
         data, chain, inverse_data = prob.get_problem_data(
-            prog_cvxpy.CustomQP(), solver_opts={"verbose": True}
+            prog_cvxpy.CustomQP(), solver_opts=solver_opts
         )
         start = time.perf_counter()
-        soln = chain.solve_via_data(prob, data)
+        soln = chain.solve_via_data(
+            prob, data, verbose=True, solver_opts=solver_opts
+        )
         kektime = time.perf_counter() - start
         prob.unpack_results(soln, chain, inverse_data)
         print(f"KEK: {file}: {prob.status=}, {prob.value=}")
@@ -89,12 +92,21 @@ if __name__ == "__main__":
         print_stuff(P, A, b, q, x, z, s, kektime, ni, file + "-kek.txt")
 
         # clarabel version
+        solver_opts = {
+            "equilibrate_enable": False,
+            "presolve_enable": False,
+            "static_regularization_enable": False,
+            "dynamic_regularization_enable": False,
+            "max_iter": 0,
+        }
         prob = cp.Problem(cp.Minimize(obj), constraints)
         data, chain, inverse_data = prob.get_problem_data(
-            cp.CLARABEL, solver_opts={"verbose": True}
+            cp.CLARABEL, solver_opts=solver_opts
         )
         start = time.perf_counter()
-        soln = chain.solve_via_data(prob, data)
+        soln = chain.solve_via_data(
+            prob, data, verbose=True, solver_opts=solver_opts
+        )
         clatime = time.perf_counter() - start
         prob.unpack_results(soln, chain, inverse_data)
         print(f"CLARABEL: {file}: {prob.status=}, {prob.value=}")
@@ -106,8 +118,14 @@ if __name__ == "__main__":
         else:
             P = 0
         # the actual call is clarabel.DefaultSolver(P,q,A,b,...)
+        kekx = x
+        kekz = z
+        keks = s
         x = soln.x
         z = soln.z
         s = soln.s
+        print(f"{np.max(np.abs(kekx - x))=}")  # TODO: DEBUG
+        print(f"{np.max(np.abs(kekz - z))=}")  # TODO: DEBUG
+        print(f"{np.max(np.abs(keks - s))=}")  # TODO: DEBUG
         ni = prob.solver_stats.num_iters
         print_stuff(P, A, b, q, x, z, s, clatime, ni, file + "-clarabel.txt")

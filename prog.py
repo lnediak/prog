@@ -23,11 +23,12 @@ class QPSolution:
 
 
 class DefaultQPKKTSolver:
-    def __init__(self, P, A):
+    def __init__(self, P, A, ir_iter):
         P = P.tocoo()
         A = A.tocoo()
         self.P = P
         self.A = A
+        self.ir_iter = ir_iter
         # now to form block matrix
         pn = P.shape[0]
         assert pn == P.shape[1]
@@ -39,15 +40,24 @@ class DefaultQPKKTSolver:
         col = np.hstack([np.arange(pn, N), P.col, A.row + pn, A.col])
         self.M = sp.coo_array((data, (row, col)), shape=(N, N))
 
+    def iterref(self, v, rhs):
+        for i in range(self.ir_iter):
+            res = rhs - self.M @ v
+            c = self.lu.solve(res)
+            v += c
+        return v
+
     def kktsolve(self, diag, rhs):
         ar, ac = self.A.shape
         if diag is None:
-            return self.lu.solve(rhs)
+            toret = self.lu.solve(rhs)
+            return self.iterref(toret, rhs)
         if len(diag) < ar:
             self.M.data[: ar - len(diag)] = 0
         self.M.data[ar - len(diag) : ar] = diag
         self.lu = sp.linalg.splu(self.M.tocsc())
-        return self.lu.solve(rhs)
+        toret = self.lu.solve(rhs)
+        return self.iterref(toret, rhs)
 
 
 class KekQP:
@@ -56,16 +66,19 @@ class KekQP:
         # this thing isn't in the paper. it's from
         # Clarabel.rs/src/solver/implementations/default/variables.rs:
         # fn _shift_to_cone_interior
-        alphap = np.max(-z[nz:], initial=-np.inf)
-        if alphap >= 0:
-            z[nz:] += alphap
-            alphap = 0
-        posmargin = np.sum(z[z > 0])
+        # it also seems crazy arbitrary to me, but whatever
+        znz = z[nz:]
+        alphap = np.max(-znz, initial=-np.inf)
+        posmargin = np.sum(znz[znz > 0], initial=0)
         if nz < len(z):
-            target = max(1, eps * posmargin / (len(z) - nz))
+            target = max(1, eps * posmargin / len(znz))
         else:
             target = 1
-        if alphap > -target:
+        print(f"{alphap=},{posmargin=}")  # TODO: DEBUG
+        if alphap >= 0:
+            z[nz:] += alphap
+            z[nz:] += target
+        elif alphap > -target:
             z[nz:] += alphap + target
         return z
 
@@ -209,10 +222,12 @@ class KekQP:
         self.nz = nz
         self.nnz = A.shape[0] - nz
         assert self.nnz >= 0
+        ir_iter = solver_opts.get("ir_iter", 10)
         if "kktsolver" in solver_opts:
+            # TODO: do ir_iter for this as well
             self.kktsolver = solver_opts["kktsolver"]
         else:
-            self.kktsolver = DefaultQPKKTSolver(P, A)
+            self.kktsolver = DefaultQPKKTSolver(P, A, ir_iter)
         ieps = solver_opts.get("init_eps", 0.1)
         teps = solver_opts.get("term_eps", 1e-8)
         ireps = solver_opts.get("ir_eps", 1e-8)
