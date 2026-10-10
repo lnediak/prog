@@ -34,8 +34,7 @@ class DefaultQPKKTSolver:
         ar, ac = A.shape
         assert pn == ac
         N = pn + ar
-        # we follow initialization given in clarabel paper
-        data = np.hstack([np.ones(ar), P.data, A.data, A.data])
+        data = np.hstack([np.zeros(ar), P.data, A.data, A.data])
         row = np.hstack([np.arange(pn, N), P.row, A.col, A.row + pn])
         col = np.hstack([np.arange(pn, N), P.col, A.row + pn, A.col])
         self.M = sp.coo_array((data, (row, col)), shape=(N, N))
@@ -52,19 +51,36 @@ class DefaultQPKKTSolver:
 
 
 class KekQP:
+    def funny_shift(self, z, nz, eps):
+        """WARNING: This mutates z"""
+        # this thing isn't in the paper. it's from
+        # Clarabel.rs/src/solver/implementations/default/variables.rs:
+        # fn _shift_to_cone_interior
+        alphap = np.max(-z[nz:], initial=-np.inf)
+        if alphap >= 0:
+            z[nz:] += alphap
+            alphap = 0
+        posmargin = np.sum(z[z > 0])
+        if nz < len(z):
+            target = max(1, eps * posmargin / (len(z) - nz))
+        else:
+            target = 1
+        if alphap > -target:
+            z[nz:] += alphap + target
+        return z
+
     def solver_init(self, eps):
         pn = self.P.shape[0]
         ar, ac = self.A.shape
+        nz, nnz = self.nz, self.nnz
         # TODO: IMPLEMENT P=0 case
         self.rhs = np.hstack([-self.q, self.b])
-        xz = self.kktsolver.kktsolve(np.ones(ar), self.rhs)
+        xz = self.kktsolver.kktsolve(-np.ones(nnz), self.rhs)
         self.x = xz[:pn]
         z = xz[pn:]
-        alphap = np.max(z[self.nz :])
-        s0 = -z if alphap < -eps else -z + np.full_like(z, eps + alphap)
-        self.s = s0[self.nz :]
-        alphad = np.max(-z[self.nz :])
-        self.z = z if alphad < -eps else z + np.full_like(z, eps + alphad)
+        s0 = self.funny_shift(-z, nz, eps)
+        self.s = s0[nz:]
+        self.z = self.funny_shift(z, nz, eps)
         self.tau = 1.0
         self.kappa = 1.0
 
@@ -97,7 +113,27 @@ class KekQP:
         self.rhs[:pn] = dx - self.stau * q
         self.rhs[pn:] = r2 + self.stau * b
         xz = self.kktsolver.kktsolve(None, self.rhs)
+
+        # TODO: DEBUG
+        self.rhs[:pn] = dx
+        self.rhs[pn:] = r2
+        xz1 = self.kktsolver.kktsolve(None, self.rhs)
+        x1, z1 = xz1[:pn], xz1[pn:]
+        self.rhs[:pn] = -q
+        self.rhs[pn:] = b
+        xz2 = self.kktsolver.kktsolve(None, self.rhs)
+        x2, z2 = xz2[:pn], xz2[pn:]
+        pxq = 2 * (P @ xi) + q
+        dtau_numer = dt - dk / tau + pxq @ x1 + b @ z1
+        dtau_denom = kappa / tau + xi @ P @ xi - pxq @ x2 - b @ z2
+        stau = dtau_numer / dtau_denom
+        print(f"{self.stau=},{stau=}")  # TODO: DEBUG
+        sx = x1 + stau * x2
+        sz = z1 + stau * z2
+
         self.sx, self.sz = xz[:pn], xz[pn:]
+        print(f"{np.max(np.abs(self.sx - sx))=}")  # TODO: DEBUG
+        print(f"{np.max(np.abs(self.sz - sz))=}")  # TODO: DEBUG
         self.ss = -ds[nz:] - Hd * self.sz[nz:]
         self.skappa = -(dk + kappa * self.stau) / tau
 
@@ -115,7 +151,7 @@ class KekQP:
         sx, sz, ss, st, sk = self.sx, self.sz, self.ss, self.stau, self.skappa
         alpha = min(self.ms_nn(s, ss), self.ms_nn(z[nz:], sz[nz:]))
         alpha = min(alpha, self.ms_nn(tau, st), self.ms_nn(kappa, sk))
-        alpha = min(1, alpha * 0.99)  # as cvxopt does
+        alpha = min(1, alpha)
         return alpha
 
     def step(self, alpha):
@@ -197,28 +233,41 @@ class KekQP:
             self.kktsolver = solver_opts["kktsolver"]
         else:
             self.kktsolver = DefaultQPKKTSolver(P, A)
-        ieps = solver_opts["init_eps"] if "init_eps" in solver_opts else 1e-8
-        teps = solver_opts["term_eps"] if "term_eps" in solver_opts else 1e-8
-        ireps = solver_opts["ir_eps"] if "ir_eps" in solver_opts else 1e-8
-        iaeps = solver_opts["ia_eps"] if "ia_eps" in solver_opts else 1e-8
+        ieps = solver_opts.get("init_eps", 0.1)
+        teps = solver_opts.get("term_eps", 1e-8)
+        ireps = solver_opts.get("ir_eps", 1e-8)
+        iaeps = solver_opts.get("ia_eps", 1e-8)
+        max_step_frac = solver_opts.get("max_step_fraction", 0.99)
+        maxit = solver_opts.get("max_iter", 200)
+        maxit = np.inf if maxit < 0 else maxit
         # TODO: RUIZ EQUILIBRATION
         self.solver_init(ieps)
         iters = 0
         while not self.check_term(teps, ireps, iaeps):
+            if iters >= maxit:
+                self.status = SStatus.MAXITER
+                break
             self.compute_res()
             self.full_kktsolve(set_diag=True)
             alpha = self.get_stepsize()
             sigma = (1 - alpha) ** 3
-            mu = np.sum(self.s * self.z[self.nz :]) / self.nnz
-            eta = self.ss * self.sz[self.nz :]
-            ee = np.ones(self.nnz)
+            mu = np.sum(self.s * self.z[self.nz :])
+            mu = (mu + self.tau * self.kappa) / (self.nnz + 1)
+            if iters == 0:
+                # don't ask me why this is done, I found it in
+                # Clarabel.rs/src/solver/implementations/default/variables.rs:
+                # fn combined_step_rhs
+                # condition from src/solver/core/solver.rs
+                self.sz *= alpha
+            etae = self.ss * self.sz[self.nz :]
+            etae -= sigma * mu
             self.dx *= 1 - sigma
             self.dz *= 1 - sigma
             self.dtau *= 1 - sigma
             self.dkappa += self.dkappa * self.dtau - sigma * mu
-            self.ds[self.nz :] += (eta - sigma * mu * ee) / self.z[self.nz :]
+            self.ds[self.nz :] += etae / self.z[self.nz :]
             self.full_kktsolve(set_diag=False)
-            alpha = self.get_stepsize()
+            alpha = self.get_stepsize() * max_step_frac
             self.step(alpha)
             iters += 1
         solution = QPSolution()

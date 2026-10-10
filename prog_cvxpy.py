@@ -143,3 +143,20 @@ if __name__ == "__main__":
     prob = cp.Problem(obj, [x <= 0])
     prob.solve(solver=CustomQP())
     print(f"{prob.status=}, should be unbounded")
+    print()
+
+    obj = cp.Minimize(cp.quad_form(x, np.eye(3)) + x[1])
+    prob = cp.Problem(obj, [x[:2] >= -1, x[1] + x[2] == 1])
+    prob.solve(solver=CustomQP(), max_iter=1, verbose=True)
+    print(f"{prob.status=},{prob.value=},{x.value=}")
+    print(f"{[c.dual_value for c in prob.constraints]=}")
+    prob = cp.Problem(obj, [x[:2] >= -1, x[1] + x[2] == 1])
+    prob.solve(
+        solver=cp.CLARABEL,
+        max_iter=1,
+        equilibrate_enable=False,
+        presolve_enable=False,
+        verbose=True,
+    )
+    print(f"{prob.status=},{prob.value=},{x.value=}")
+    print(f"{[c.dual_value for c in prob.constraints]=}")
